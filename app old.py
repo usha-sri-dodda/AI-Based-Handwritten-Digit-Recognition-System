@@ -5,10 +5,13 @@ Run: streamlit run app.py
 """
 
 import os, io, json, base64
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 import numpy as np
 import streamlit as st
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
 # ── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -201,24 +204,11 @@ html, body, [class*="css"] {
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 @st.cache_resource
-def load_model(path="models/cnn_mnist.tflite"):
+def load_model(path="models/cnn_mnist.keras"):
+    import tensorflow as tf
     if not os.path.exists(path):
         return None
-    try:
-        try:
-            from ai_edge_litert.interpreter import Interpreter
-        except ImportError:
-            try:
-                from tflite_runtime.interpreter import Interpreter
-            except ImportError:
-                import tensorflow as tf
-                Interpreter = tf.lite.Interpreter
-        interp = Interpreter(model_path=path)
-        interp.allocate_tensors()
-        return interp
-    except Exception as e:
-        st.error(f"Model load error: {e}")
-        return None
+    return tf.keras.models.load_model(path)
 
 
 def preprocess_image(img: Image.Image) -> np.ndarray:
@@ -275,7 +265,7 @@ def fig_to_b64(fig) -> str:
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     model_choice = st.selectbox("Model", ["CNN (Recommended)", "MLP (Baseline)"])
-    model_path = "models/cnn_mnist.tflite" if "CNN" in model_choice else "models/mlp_mnist.tflite"
+    model_path = "models/cnn_mnist.keras" if "CNN" in model_choice else "models/mlp_mnist.keras"
 
     st.markdown("---")
     st.markdown("### ℹ️ About")
@@ -311,7 +301,10 @@ st.markdown("""
 # ── Model status ──────────────────────────────────────────────────────────────
 model = load_model(model_path)
 if model is None:
-    st.warning("⚠️ No model found. Make sure `models/cnn_mnist.tflite` is in your repo.")
+    st.warning("""
+    ⚠️ **No trained model found.**  
+    Run `python train_model.py` first to train and save the model, then refresh this page.
+    """)
 else:
     st.success(f"✅ Model loaded: `{model_path}`")
 
@@ -327,13 +320,9 @@ with tabs[0]:
 
     def run_prediction(arr_28x28_1ch):
         if model is None:
-            st.error("No model found. Add models/cnn_mnist.tflite to your repo.")
+            st.error("Train the model first!")
             return
-        inp_det = model.get_input_details()
-        out_det = model.get_output_details()
-        model.set_tensor(inp_det[0]["index"], arr_28x28_1ch.astype("float32"))
-        model.invoke()
-        probs = model.get_tensor(out_det[0]["index"])[0]
+        probs = model.predict(arr_28x28_1ch, verbose=0)[0]
         pred  = int(np.argmax(probs))
         conf  = probs[pred] * 100
         st.markdown(f'<div class="pred-badge">{pred}</div>', unsafe_allow_html=True)
@@ -466,22 +455,16 @@ with tabs[0]:
             st.markdown('<div class="card-title">🔢 Pick an MNIST Sample</div>',
                         unsafe_allow_html=True)
             try:
-                from sklearn.datasets import fetch_openml
-                @st.cache_data
-                def load_mnist_samples():
-                    mnist = fetch_openml("mnist_784", version=1, as_frame=False, parser="auto")
-                    X = mnist.data.astype("float32") / 255.0
-                    y = mnist.target.astype("int32")
-                    return X[60000:], y[60000:]
-                X_test_s, y_test_s = load_mnist_samples()
+                from tensorflow.keras.datasets import mnist as _mnist
+                (_, _), (X_test_s, y_test_s) = _mnist.load_data()
                 sample_digit = st.selectbox("Pick digit", list(range(10)), index=5)
                 idxs = np.where(y_test_s == sample_digit)[0]
                 sample_idx = st.slider("Sample index", 0, min(49, len(idxs)-1), 0)
                 chosen_idx = idxs[sample_idx]
-                sample_arr = X_test_s[chosen_idx].astype("float32")
+                sample_arr = X_test_s[chosen_idx].astype("float32") / 255.0
                 use_sample = st.button("⚡ Predict Sample", use_container_width=True)
             except Exception:
-                st.info("MNIST samples unavailable.")
+                st.info("MNIST samples unavailable — train the model first.")
                 use_sample = False
                 sample_arr = None
 
